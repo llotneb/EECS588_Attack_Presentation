@@ -1,0 +1,22 @@
+<html>
+  <head>
+    <title>site</title>
+  </head>
+  <body>
+  <p id="message"></p>
+  <script>
+    var searchFor = "username=";
+    var usernameLoc = document.cookie.indexOf(searchFor);
+    if (usernameLoc == -1) {
+      message.textContent = "You are not logged in.";
+    } else {
+      message.textContent = "Hello " + document.cookie.substr(usernameLoc + searchFor.length);
+    }
+  </script>
+  <p>Enter username here:</p>
+  <input type="text" id="username_input"><br>
+  <input type="button" onclick="document.cookie='username='+username_input.value" value="Submit">
+  <input type="button" onclick="document.cookie='username=; expires=Thu, 01 Jan 1970 00:00:01 GMT;'" value="Log out">
+  </body>
+</html>
+
