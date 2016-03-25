@@ -9,6 +9,8 @@
 #include <linux/netfilter.h>    
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
+#include "process_packet.h"
+
 using namespace std;
 
 // https://home.regit.org/netfilter-en/using-nfqueue-and-libnetfilter_queue/
@@ -72,6 +74,7 @@ static void print_pkt(struct nfq_data *tb)
     //processPacketData (data, ret);
   }
   fputc('\n', stdout);
+  ProcessPacket(data, ret);
 }
 
 
