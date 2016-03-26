@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cassert>
 #include <cstdint>
+#include <cmath>
 #include <iostream>
 
 #include <netinet/in.h>
@@ -9,9 +10,15 @@
 #include <linux/netfilter.h>    
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
+#include <time.h>
+
+   int nanosleep(const struct timespec *req, struct timespec *rem);
+
 #include "process_packet.h"
 
 using namespace std;
+
+double delay = 0;
 
 // https://home.regit.org/netfilter-en/using-nfqueue-and-libnetfilter_queue/
 // http://www.netfilter.org/projects/libnetfilter_queue/doxygen/nfqnl__test_8c_source.html
@@ -74,7 +81,18 @@ static void print_pkt(struct nfq_data *tb)
     //processPacketData (data, ret);
   }
   fputc('\n', stdout);
-  ProcessPacket(data, ret);
+  //ProcessPacket(data, ret);
+
+  struct timespec req;
+  req.tv_sec = floor(delay);
+  req.tv_nsec = floor((delay - floor(delay))*1000000000);
+
+  ret = nanosleep(&req, nullptr);
+  if (ret < 0) {
+    cerr << "error sleeping" << endl;
+  }
+
+  return;
 }
 
 
@@ -96,6 +114,10 @@ int main(int argc, char *argv[]) {
   assert(argc >= 2);
   int queueNum = atoi(argv[1]);
   cout << "using queue num " << queueNum << endl;
+  if (argc >= 3) {
+    delay = atof(argv[2]);
+  }
+  cout << "delaying " << delay << " seconds" << endl;
 
   struct nfq_handle *h;
   h = nfq_open();
