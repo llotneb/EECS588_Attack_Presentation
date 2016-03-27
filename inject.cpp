@@ -3,27 +3,87 @@
 #include <cassert>
 #include <cstdint>
 #include <cmath>
+#include <cstring>
+#include <queue>
 #include <iostream>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <random>
 
 #include <netinet/in.h>
 #include <linux/types.h>
 #include <linux/netfilter.h>    
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h> 
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <time.h>
-
-   int nanosleep(const struct timespec *req, struct timespec *rem);
+#include <netdb.h> 
 
 #include "process_packet.h"
 
 using namespace std;
 
 double delay = 0;
+double variation = 0;
+double throttle = 0;
+
+using uint64 = uint64_t;
+using uint32 = uint32_t;
+
+struct WaitingPacket {
+  uint32_t id;
+  int length;
+  unsigned char* data;
+  uint64 createdTime;
+
+  WaitingPacket(uint32_t id, int length, unsigned char* data, uint64 time) :
+      id(id), length(length), data(data), createdTime(time) {
+  }
+};
+
+struct ArrivedPacket {
+  uint32_t id;
+  int length;
+  unsigned char* data;
+  uint64 arrivedTime;
+
+  ArrivedPacket(uint32_t id, int length, unsigned char* data, uint64 time) :
+      id(id), length(length), data(data), arrivedTime(time) {
+  }
+};
+
+queue<WaitingPacket> waitingPackets;
+mutex waitingPacketsMutex;
+condition_variable waitingPacketsCv;
+
+queue<ArrivedPacket> arrivedPackets;
+mutex arrivedPacketsMutex;
+condition_variable arrivedPacketsCv;
+
+random_device randomDevice;
+mt19937 prng(randomDevice());
+nfq_q_handle *queue_handle;
+
+int sockToClient;
+int sockToServer;
+
+char password[8] = "toritup";
+
+
+uint64 getTime() {
+  return chrono::time_point_cast<chrono::duration<uint64, micro>>(chrono::system_clock::now()).time_since_epoch().count();
+}
 
 // https://home.regit.org/netfilter-en/using-nfqueue-and-libnetfilter_queue/
 // http://www.netfilter.org/projects/libnetfilter_queue/doxygen/nfqnl__test_8c_source.html
 // https://github.com/irontec/netfilter-nfqueue-samples/blob/master/sample-helloworld.c
-
 static void print_pkt(struct nfq_data *tb)
 {
   int id = 0;
@@ -97,8 +157,8 @@ static void print_pkt(struct nfq_data *tb)
 
 
 /* Definition of callback function */
-static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
-              struct nfq_data *nfa, void *data)
+static int cb(nfq_q_handle *qh, nfgenmsg *nfmsg,
+              nfq_data *nfa, void *data)
 {
   print_pkt(nfa);
   uint32_t id;
@@ -107,18 +167,123 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
   id = ntohl(ph->packet_id);
   return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL); /* Verdict packet */
 }
- 
+
+int cbAddToWaiting(nfq_q_handle *qh, nfgenmsg *nfmsg, 
+                   nfq_data *nfa, void *passed_data) {
+  uint64 createdTime = getTime();
+  queue_handle = qh;
+  struct nfqnl_msg_packet_hdr *ph = nfq_get_msg_packet_hdr(nfa); 
+  uint32_t id = ntohl(ph->packet_id);
+  unsigned char* data;
+  int length = nfq_get_payload(nfa, &data);
+  waitingPacketsMutex.lock();
+  waitingPackets.push(WaitingPacket(id, length, data, createdTime));
+  waitingPacketsMutex.unlock();
+  waitingPacketsCv.notify_one();
+}
+
+int cbDetect(nfq_q_handle *qh, nfgenmsg *nfmsg, 
+             nfq_data *nfa, void *passed_data) {
+  uint64 arrivedTime = getTime();
+  struct nfqnl_msg_packet_hdr *ph = nfq_get_msg_packet_hdr(nfa); 
+  uint32_t id = ntohl(ph->packet_id);
+  unsigned char* data;
+  int length = nfq_get_payload(nfa, &data);
+  return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL); /* Verdict packet */
+  arrivedPacketsMutex.lock();
+  arrivedPackets.push(ArrivedPacket(id, length, data, arrivedTime));
+  arrivedPacketsMutex.unlock();
+  arrivedPacketsCv.notify_one();
+}
 
 
-int main(int argc, char *argv[]) {
-  assert(argc >= 2);
-  int queueNum = atoi(argv[1]);
-  cout << "using queue num " << queueNum << endl;
-  if (argc >= 3) {
-    delay = atof(argv[2]);
+struct SentPacket {
+  int length;
+  uint64 createdTime;
+  uint64 sentTime;
+
+  SentPacket(int length, uint64 createdTime, uint64 sentTime) :
+      length(length), createdTime(createdTime), sentTime(sentTime) {
   }
-  cout << "delaying " << delay << " seconds" << endl;
 
+};
+
+void sendPackets() {
+  vector<SentPacket> sentPackets;
+  uint64 firstAdded = getTime();
+  
+  normal_distribution<> distribution(0.0, variation);
+
+  while (true) {
+    double jitter = distribution(prng);
+    jitter = max(min(jitter, variation*3.0), -variation*3.0);
+    uint64 currentDelay = max(delay + jitter + throttle, 0.0)*1000000;
+
+    unique_lock<mutex> lock(waitingPacketsMutex);
+    while (!waitingPackets.empty() && getTime() - waitingPackets.front().createdTime >= currentDelay) {
+      waitingPacketsCv.wait(lock);
+    }
+    WaitingPacket toSend = waitingPackets.front();
+    waitingPackets.pop();
+    lock.unlock();
+
+    uint64 time = getTime();
+    int ret = nfq_set_verdict(queue_handle, toSend.id, NF_ACCEPT, 0, NULL); /* Verdict packet */
+    assert(ret >= 0);
+
+    sentPackets.push_back(SentPacket(toSend.length, toSend.createdTime, time));
+    if (sentPackets.size() >= 10 || (sentPackets.size() >= 2 && time - firstAdded >= 2*1000000)) {
+      vector<uint64> data;
+      for (int i = 0; i < sentPackets.size(); ++i) {
+        data.push_back(sentPackets[i].length);
+        data.push_back(sentPackets[i].sentTime);
+      }
+      ret = write(sockToClient, data.data(), data.size()*8);
+      assert(ret == data.size()*8);
+      sentPackets.clear();
+    } else if (sentPackets.size() == 1) {
+      firstAdded = getTime();
+    }
+  }
+}
+
+void detectPackets() {
+  vector<ArrivedPacket> seenPackets;
+  vector<SentPacket> sentPackets;
+
+  uint64 buffer[20];
+  int haveAmount = 0;
+
+  int ret = recv(sockToServer, (char*)buffer + haveAmount, 20*8, MSG_DONTWAIT);
+  if (ret == EAGAIN || ret == EWOULDBLOCK) {
+  } else if (ret > 0) {
+    haveAmount += ret;
+    for (int i = 0; i < haveAmount/16; i++) {
+      sentPackets.push_back(SentPacket(buffer[i*2], 0, buffer[i*2+1]));
+      cout << "new sent packet data " << sentPackets.back().length << endl;
+    }
+    memmove(buffer, (char*)buffer + (haveAmount/16)*16, (haveAmount/16)*16);
+    haveAmount = haveAmount % 16;
+  } else {
+    perror("recv error");
+    exit(1);
+  }
+
+  arrivedPacketsMutex.lock();
+  while (!arrivedPackets.empty()) {
+    seenPackets.push_back(arrivedPackets.front());
+    arrivedPackets.pop();
+    cout << "new packet seen " << seenPackets.back().length << endl;
+  }
+  arrivedPacketsMutex.unlock();
+}
+  
+  
+  
+
+void activateNFQ(int queueNum, 
+              int (*cb)(struct nfq_q_handle*, struct nfgenmsg*, 
+                        struct nfq_data*, void*)) {
   struct nfq_handle *h;
   h = nfq_open();
   if (!h) {
@@ -140,7 +305,7 @@ int main(int argc, char *argv[]) {
 
   /* Set callback function */
   cout << "binding this socket to queue " << queueNum << endl;
-  struct nfq_q_handle *qh = nfq_create_queue(h,  queueNum, &cb, NULL);
+  struct nfq_q_handle *qh = nfq_create_queue(h,  queueNum, cb, NULL);
   if (!qh) {
     fprintf(stderr, "error during nfq_create_queue()\n");
     exit(1);
@@ -162,6 +327,108 @@ int main(int argc, char *argv[]) {
           nfq_handle_packet(h, buf, rv); /* send packet to callback */
           continue;
       }
+  }
+}
+
+void setupSockToClient() {
+  int listeningSock;
+  int portNum = 17666;
+  struct sockaddr_in serverAddr, clientAddr;
+  listeningSock = socket(AF_INET, SOCK_STREAM, 0);
+  if (listeningSock < 0) {
+    perror("ERROR opening socket");
+    exit(1);
+  }
+  memset(&serverAddr, sizeof(serverAddr), 0);
+  serverAddr.sin_family = AF_INET;
+  serverAddr.sin_addr.s_addr = INADDR_ANY;
+  serverAddr.sin_port = htons(portNum);
+  if (bind(listeningSock, (struct sockaddr *) &serverAddr, sizeof(serverAddr)) < 0) {
+    perror("error binding");
+    exit(1);
+  }
+  listen(listeningSock, 5);
+
+  while (true) {
+    socklen_t clientLen = sizeof(clientAddr);
+    sockToClient = accept(listeningSock, (struct sockaddr *)&clientAddr, &clientLen);
+    if (sockToClient < 0) {
+      perror("error accepting");
+      exit(1);
+    }
+    char buffer[8];
+    int ret = read(sockToClient, buffer, 8);
+    if (ret < 8) {
+      perror("error getting password");
+      exit(1);
+    }
+    buffer[7]= '\0';
+    if (strcmp(buffer, password) != 0) {
+      cerr << "wrong password, got " << buffer << endl;
+      close(sockToClient);
+    } else {
+      break;
+    }
+  }
+
+}
+
+void setupSockToServer(const string& serverName) {
+  int portNum = 17666;
+  sockToServer = socket(AF_INET, SOCK_STREAM, 0);
+  if (sockToServer < 0) {
+    perror("error creating socket");
+    exit(1);
+  }
+  struct hostent *server = gethostbyname(serverName.c_str());
+  if (server == NULL) {
+    fprintf(stderr,"ERROR, no such host\n");
+    exit(1);
+  }
+  struct sockaddr_in serverAddr;
+  memset(&serverAddr, sizeof(serverAddr), 0);
+  serverAddr.sin_family = AF_INET;
+  memcpy((char*)&serverAddr.sin_addr.s_addr, (char*)server->h_addr, server->h_length);
+  serverAddr.sin_port = htons(portNum);
+  if (connect(sockToServer, (struct sockaddr *) &serverAddr, sizeof(serverAddr)) < 0) {
+    perror("cannot connect");
+    exit(1);
+  }
+  int ret = write(sockToServer, password, 8);
+  if (ret < 0) {
+    perror("ERROR writing to socket");
+    exit(1);
+  }
+}
+
+
+int main(int argc, char *argv[]) {
+  assert(argc >= 3);
+  int queueNum = atoi(argv[1]);
+  cout << "using queue num " << queueNum << endl;
+ 
+  if (strcmp(argv[2], "log") == 0) {
+    if (argc >= 4) {
+      delay = atof(argv[3]);
+    }
+    cout << "delaying " << delay << " seconds" << endl;
+    activateNFQ(queueNum, &cb);
+  } else if (strcmp(argv[2], "inject") == 0) {
+    assert(argc >= 6);
+    delay = atof(argv[3]);
+    cout << "delaying somewhere around " << delay << " seconds" << endl;
+    variation = atof(argv[4]);
+    cout << "variation " << variation << " seconds" << endl;
+    throttle = atof(argv[5]);
+    cout << "throttle " << throttle << " seconds" << endl;
+    setupSockToClient();
+    thread sendThread(sendPackets);
+    activateNFQ(queueNum, cbAddToWaiting);
+  } else if (strcmp(argv[2], "detect") == 0) {
+    string serverName = "52.201.254.150";
+    setupSockToServer(serverName);
+    thread detectThread(detectPackets);
+    activateNFQ(queueNum, cbDetect);
   }
   return 0;
 }
