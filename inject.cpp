@@ -393,6 +393,7 @@ void setupSockToClient() {
       cerr << "wrong password, got " << buffer << endl;
       close(sockToClient);
     } else {
+      cout << "client has connected" << endl;
       break;
     }
   }
@@ -425,6 +426,7 @@ void setupSockToServer(const string& serverName) {
     perror("ERROR writing to socket");
     exit(1);
   }
+  cout << "connected to server" << endl;
 }
 
 
