@@ -192,6 +192,7 @@ int cbDetect(nfq_q_handle *qh, nfgenmsg *nfmsg,
   unsigned char* data;
   int length = nfq_get_payload(nfa, &data);
   return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL); /* Verdict packet */
+  cout << "packet arrived" << endl;
   arrivedPacketsMutex.lock();
   arrivedPackets.push(ArrivedPacket(id, length, data, arrivedTime));
   arrivedPacketsMutex.unlock();
@@ -257,8 +258,8 @@ void sendPackets() {
 }
 
 void detectPackets() {
-  vector<ArrivedPacket> seenPackets;
-  vector<SentPacket> sentPackets;
+  vector<ArrivedPacket> seenPackets; // Packts that have fully arrived through tor
+  vector<SentPacket> sentPackets; // Packet times of sent packets. The server sent us these times.
 
   int64 buffer[20];
   int haveAmount = 0;
@@ -286,7 +287,7 @@ void detectPackets() {
       }
     }
 
-    arrivedPacketsMutex.lock();
+    arrivedPacketsMutex.lock(); // arrived packets is just a temporary store of packets from tor
     while (!arrivedPackets.empty()) {
       seenPackets.push_back(arrivedPackets.front());
       arrivedPackets.pop();
