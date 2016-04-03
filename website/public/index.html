@@ -16,7 +16,13 @@
   <p>Enter username here:</p>
   <input type="text" id="username_input"><br>
   <input type="button" onclick="document.cookie='username='+username_input.value" value="Submit">
-  <input type="button" onclick="document.cookie='username=; expires=Thu, 01 Jan 1970 00:00:01 GMT;'" value="Log out">
+  <input type="button" onclick="document.cookie='username=; expires=Thu, 01 Jan 1970 00:00:01 GMT;'" value="Log out"><br>
+  <p><a href="changelog.txt">View changelog</a></p>
+  <form action="upload" enctype="multipart/form-data" method="post">
+    <p>Upload a file</p>
+    <input type="file" name="datafile">
+    <input type="submit" value="Send">
+  </form>
   </body>
 </html>
 
