@@ -352,6 +352,7 @@ void activateNFQ(int queueNum,
 }
 
 void setupSockToClient() {
+  cout << "setting up sock to client" << endl;
   int listeningSock;
   int portNum = 17666;
   struct sockaddr_in serverAddr, clientAddr;
@@ -402,6 +403,7 @@ void setupSockToClient() {
 }
 
 void setupSockToServer(const string& serverName) {
+  cout << "setting up sock to server" << endl;
   int portNum = 17666;
   sockToServer = socket(AF_INET, SOCK_STREAM, 0);
   if (sockToServer < 0) {
