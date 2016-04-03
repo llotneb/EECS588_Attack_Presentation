@@ -191,12 +191,12 @@ int cbDetect(nfq_q_handle *qh, nfgenmsg *nfmsg,
   uint32 id = ntohl(ph->packet_id);
   unsigned char* data;
   int length = nfq_get_payload(nfa, &data);
-  return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL); /* Verdict packet */
   cout << "packet arrived" << endl;
   arrivedPacketsMutex.lock();
   arrivedPackets.push(ArrivedPacket(id, length, data, arrivedTime));
   arrivedPacketsMutex.unlock();
   arrivedPacketsCv.notify_one();
+  return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL); /* Verdict packet */
 }
 
 
