@@ -375,6 +375,7 @@ void setupSockToClient() {
   }
   listen(listeningSock, 5);
 
+  cout << "listening for client" << endl;
   while (true) {
     socklen_t clientLen = sizeof(clientAddr);
     sockToClient = accept(listeningSock, (struct sockaddr *)&clientAddr, &clientLen);
@@ -417,6 +418,7 @@ void setupSockToServer(const string& serverName) {
   serverAddr.sin_family = AF_INET;
   memcpy((char*)&serverAddr.sin_addr.s_addr, (char*)server->h_addr, server->h_length);
   serverAddr.sin_port = htons(portNum);
+  cout << "trying to connect to server" << endl;
   if (connect(sockToServer, (struct sockaddr *) &serverAddr, sizeof(serverAddr)) < 0) {
     perror("cannot connect");
     exit(1);
