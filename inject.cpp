@@ -35,26 +35,27 @@ double variation = 0;
 double throttle = 0;
 
 using uint64 = uint64_t;
+using int64 = int64_t;
 using uint32 = uint32_t;
 
 struct WaitingPacket {
   uint32_t id;
   int length;
   unsigned char* data;
-  uint64 createdTime;
+  int64 createdTime;
 
-  WaitingPacket(uint32_t id, int length, unsigned char* data, uint64 time) :
+  WaitingPacket(uint32_t id, int length, unsigned char* data, int64 time) :
       id(id), length(length), data(data), createdTime(time) {
   }
 };
 
 struct ArrivedPacket {
-  uint32_t id;
+  uint32 id;
   int length;
   unsigned char* data;
-  uint64 arrivedTime;
+  int64 arrivedTime;
 
-  ArrivedPacket(uint32_t id, int length, unsigned char* data, uint64 time) :
+  ArrivedPacket(uint32 id, int length, unsigned char* data, int64 time) :
       id(id), length(length), data(data), arrivedTime(time) {
   }
 };
@@ -69,7 +70,7 @@ condition_variable arrivedPacketsCv;
 
 random_device randomDevice;
 mt19937 prng(randomDevice());
-nfq_q_handle *queue_handle;
+nfq_q_handle *queue_handle = (nfq_q_handle*)7;
 
 int sockToClient;
 int sockToServer;
@@ -77,8 +78,8 @@ int sockToServer;
 char password[8] = "toritup";
 
 
-uint64 getTime() {
-  return chrono::time_point_cast<chrono::duration<uint64, micro>>(chrono::system_clock::now()).time_since_epoch().count();
+int64 getTime() {
+  return chrono::time_point_cast<chrono::duration<int64, micro>>(chrono::system_clock::now()).time_since_epoch().count();
 }
 
 // https://home.regit.org/netfilter-en/using-nfqueue-and-libnetfilter_queue/
@@ -161,7 +162,7 @@ static int cb(nfq_q_handle *qh, nfgenmsg *nfmsg,
               nfq_data *nfa, void *data)
 {
   print_pkt(nfa);
-  uint32_t id;
+  uint32 id;
   struct nfqnl_msg_packet_hdr *ph;
   ph = nfq_get_msg_packet_hdr(nfa); 
   id = ntohl(ph->packet_id);
@@ -170,10 +171,11 @@ static int cb(nfq_q_handle *qh, nfgenmsg *nfmsg,
 
 int cbAddToWaiting(nfq_q_handle *qh, nfgenmsg *nfmsg, 
                    nfq_data *nfa, void *passed_data) {
-  uint64 createdTime = getTime();
+  int64 createdTime = getTime();
   queue_handle = qh;
+  cout << "to wait packet has handle " << queue_handle << endl;
   struct nfqnl_msg_packet_hdr *ph = nfq_get_msg_packet_hdr(nfa); 
-  uint32_t id = ntohl(ph->packet_id);
+  uint32 id = ntohl(ph->packet_id);
   unsigned char* data;
   int length = nfq_get_payload(nfa, &data);
   waitingPacketsMutex.lock();
@@ -184,9 +186,9 @@ int cbAddToWaiting(nfq_q_handle *qh, nfgenmsg *nfmsg,
 
 int cbDetect(nfq_q_handle *qh, nfgenmsg *nfmsg, 
              nfq_data *nfa, void *passed_data) {
-  uint64 arrivedTime = getTime();
+  int64 arrivedTime = getTime();
   struct nfqnl_msg_packet_hdr *ph = nfq_get_msg_packet_hdr(nfa); 
-  uint32_t id = ntohl(ph->packet_id);
+  uint32 id = ntohl(ph->packet_id);
   unsigned char* data;
   int length = nfq_get_payload(nfa, &data);
   return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL); /* Verdict packet */
@@ -199,10 +201,10 @@ int cbDetect(nfq_q_handle *qh, nfgenmsg *nfmsg,
 
 struct SentPacket {
   int length;
-  uint64 createdTime;
-  uint64 sentTime;
+  int64 createdTime;
+  int64 sentTime;
 
-  SentPacket(int length, uint64 createdTime, uint64 sentTime) :
+  SentPacket(int length, int64 createdTime, int64 sentTime) :
       length(length), createdTime(createdTime), sentTime(sentTime) {
   }
 
@@ -210,30 +212,36 @@ struct SentPacket {
 
 void sendPackets() {
   vector<SentPacket> sentPackets;
-  uint64 firstAdded = getTime();
+  int64 firstAdded = getTime();
   
   normal_distribution<> distribution(0.0, variation);
 
   while (true) {
     double jitter = distribution(prng);
     jitter = max(min(jitter, variation*3.0), -variation*3.0);
-    uint64 currentDelay = max(delay + jitter + throttle, 0.0)*1000000;
+    int64 currentDelay = max(delay + jitter + throttle, 0.0)*1000000;
 
     unique_lock<mutex> lock(waitingPacketsMutex);
-    while (!waitingPackets.empty() && getTime() - waitingPackets.front().createdTime >= currentDelay) {
+    while (waitingPackets.empty()) {
       waitingPacketsCv.wait(lock);
+    } 
+    int64 toWait = currentDelay - (getTime() - waitingPackets.front().createdTime);
+    if (toWait > 0) {
+      lock.unlock();
+      this_thread::sleep_for(chrono::microseconds(toWait));
+      lock.lock();
     }
     WaitingPacket toSend = waitingPackets.front();
     waitingPackets.pop();
     lock.unlock();
 
-    uint64 time = getTime();
+    int64 time = getTime();
     int ret = nfq_set_verdict(queue_handle, toSend.id, NF_ACCEPT, 0, NULL); /* Verdict packet */
     assert(ret >= 0);
 
     sentPackets.push_back(SentPacket(toSend.length, toSend.createdTime, time));
     if (sentPackets.size() >= 10 || (sentPackets.size() >= 2 && time - firstAdded >= 2*1000000)) {
-      vector<uint64> data;
+      vector<int64> data;
       for (int i = 0; i < sentPackets.size(); ++i) {
         data.push_back(sentPackets[i].length);
         data.push_back(sentPackets[i].sentTime);
@@ -245,37 +253,48 @@ void sendPackets() {
       firstAdded = getTime();
     }
   }
+  cout << "done with sendPackets" << endl;
 }
 
 void detectPackets() {
   vector<ArrivedPacket> seenPackets;
   vector<SentPacket> sentPackets;
 
-  uint64 buffer[20];
+  int64 buffer[20];
   int haveAmount = 0;
 
-  int ret = recv(sockToServer, (char*)buffer + haveAmount, 20*8, MSG_DONTWAIT);
-  if (ret == EAGAIN || ret == EWOULDBLOCK) {
-  } else if (ret > 0) {
-    haveAmount += ret;
-    for (int i = 0; i < haveAmount/16; i++) {
-      sentPackets.push_back(SentPacket(buffer[i*2], 0, buffer[i*2+1]));
-      cout << "new sent packet data " << sentPackets.back().length << endl;
+  while (true) {
+    while (true) {
+      int ret = recv(sockToServer, (char*)buffer + haveAmount, 20*8, MSG_DONTWAIT);
+      if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      } else if (ret > 0) {
+        haveAmount += ret;
+        cout << "ret was " << ret << " haveAmount " << haveAmount << endl;
+        for (int i = 0; i < haveAmount/16; i++) {
+          sentPackets.push_back(SentPacket(buffer[i*2], 0, buffer[i*2+1]));
+          cout << "new sent packet data " << sentPackets.back().length << endl;
+        }
+        memmove(buffer, (char*)buffer + (haveAmount/16)*16, (haveAmount/16)*16);
+        haveAmount = haveAmount % 16;
+      } else {
+        perror("recv error");
+        cerr << ret << ' ' << errno << endl;
+        exit(1);
+      }
+      if (ret <= 0) {
+        break;
+      }
     }
-    memmove(buffer, (char*)buffer + (haveAmount/16)*16, (haveAmount/16)*16);
-    haveAmount = haveAmount % 16;
-  } else {
-    perror("recv error");
-    exit(1);
-  }
 
-  arrivedPacketsMutex.lock();
-  while (!arrivedPackets.empty()) {
-    seenPackets.push_back(arrivedPackets.front());
-    arrivedPackets.pop();
-    cout << "new packet seen " << seenPackets.back().length << endl;
+    arrivedPacketsMutex.lock();
+    while (!arrivedPackets.empty()) {
+      seenPackets.push_back(arrivedPackets.front());
+      arrivedPackets.pop();
+      cout << "new packet seen " << seenPackets.back().length << endl;
+    }
+    arrivedPacketsMutex.unlock();
+    this_thread::sleep_for(chrono::milliseconds(500));
   }
-  arrivedPacketsMutex.unlock();
 }
   
   
@@ -284,6 +303,7 @@ void detectPackets() {
 void activateNFQ(int queueNum, 
               int (*cb)(struct nfq_q_handle*, struct nfgenmsg*, 
                         struct nfq_data*, void*)) {
+  cout << "activating nfq" << endl;
   struct nfq_handle *h;
   h = nfq_open();
   if (!h) {
@@ -320,6 +340,7 @@ void activateNFQ(int queueNum,
   int fd = nfq_fd(h);
   int rv;
   char buf[4096];
+  cout << "final packet handle loop" << endl;
   while (true) {
       //cout << "top of loop" << endl;
       if ((rv = recv(fd, buf, sizeof(buf), 0)) >= 0) {
@@ -337,6 +358,11 @@ void setupSockToClient() {
   listeningSock = socket(AF_INET, SOCK_STREAM, 0);
   if (listeningSock < 0) {
     perror("ERROR opening socket");
+    exit(1);
+  }
+  int enable = 1;
+  if (setsockopt(listeningSock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) {
+    perror("setsockopt(SO_REUSEADDR) failed");
     exit(1);
   }
   memset(&serverAddr, sizeof(serverAddr), 0);
@@ -422,13 +448,16 @@ int main(int argc, char *argv[]) {
     throttle = atof(argv[5]);
     cout << "throttle " << throttle << " seconds" << endl;
     setupSockToClient();
+    cout << "creating new sendPacket thread" << endl;
     thread sendThread(sendPackets);
     activateNFQ(queueNum, cbAddToWaiting);
   } else if (strcmp(argv[2], "detect") == 0) {
     string serverName = "52.201.254.150";
     setupSockToServer(serverName);
+    cout << "creating new detectPacket thread" << endl;
     thread detectThread(detectPackets);
     activateNFQ(queueNum, cbDetect);
   }
+  cout << "final return" << endl;
   return 0;
 }
