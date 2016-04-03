@@ -191,7 +191,6 @@ int cbDetect(nfq_q_handle *qh, nfgenmsg *nfmsg,
   uint32 id = ntohl(ph->packet_id);
   unsigned char* data;
   int length = nfq_get_payload(nfa, &data);
-  cout << "packet arrived" << endl;
   arrivedPacketsMutex.lock();
   arrivedPackets.push(ArrivedPacket(id, length, data, arrivedTime));
   arrivedPacketsMutex.unlock();
