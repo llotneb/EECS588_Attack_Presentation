@@ -259,7 +259,7 @@ void sendPackets() {
 
     int64 targetTime;
     if (speed == FAST) {
-      targetTime = sentTimes.front() + million/fastSpeed;
+      targetTime = sentTimes.front() + bucketSize*(int64)(million/fastSpeed);
     } else {
       targetTime = sentTimes.back() + million/slowSpeed;
     }
@@ -273,7 +273,7 @@ void sendPackets() {
     if (speed == SLOW && (now % period) + toWait >= period) {
       toWait = min(toWait, 
                    max(period - (now % period),
-                       sentTimes.front() + 3*(int64)(million/fastSpeed)));
+                       sentTimes.front() + bucketSize*(int64)(million/fastSpeed)));
     }
     if (toWait > 0) {
       lock.unlock();
