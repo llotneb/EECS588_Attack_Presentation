@@ -495,7 +495,7 @@ int main(int argc, char *argv[]) {
     thread sendThread(sendPackets);
     activateNFQ(queueNum, cbAddToWaiting);
   } else if (strcmp(argv[2], "detect") == 0) {
-    string serverName = "52.201.254.150";
+    string serverName = "socialr.xyz";
     setupSockToServer(serverName);
     cout << "creating new detectPacket thread" << endl;
     thread detectThread(detectPackets);
