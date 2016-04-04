@@ -357,14 +357,14 @@ void detectPackets() {
     }
     arrivedPacketsMutex.unlock();
 
-    ofstream ofsSeen("seenpackets.txt", ios_base::app);
+    ofstream ofsSeen("seenpackets.csv", ios_base::app);
     for (int i = seenWritten; i < seenPackets.size(); ++i) {
       ofsSeen << seenPackets[i].id << ',' << seenPackets[i].length << ',' << seenPackets[i].arrivedTime << '\n';
       ++seenWritten;
     }
     ofsSeen.close();
 
-    ofstream ofsSent("sentpackets.txt", ios_base::app);
+    ofstream ofsSent("sentpackets.csv", ios_base::app);
     for (int i = sentWritten; i < sentPackets.size(); ++i) {
       ofsSent << sentPackets[i].length << ',' << sentPackets[i].sentTime << '\n';
       ++sentWritten;
