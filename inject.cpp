@@ -13,6 +13,9 @@
 #include <fstream>
 #include <vector>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <linux/types.h>
 #include <linux/netfilter.h>    
@@ -35,6 +38,16 @@ using namespace std;
 double delay = 0;
 double variation = 0;
 double throttle = 0;
+int numClients = 0;
+
+struct Client {
+  int sock;
+  socklen_t clientLen;
+  struct sockaddr_in addr;
+  string username;
+};
+vector<Client> clients;
+  
 
 using uint64 = uint64_t;
 using int64 = int64_t;
@@ -74,12 +87,12 @@ random_device randomDevice;
 mt19937 prng(randomDevice());
 nfq_q_handle *queue_handle = (nfq_q_handle*)7;
 
-int sockToClient;
 int sockToServer;
 
 char password[8] = "toritup";
 
 
+//in microseconds
 int64 getTime() {
   return chrono::time_point_cast<chrono::duration<int64, micro>>(chrono::system_clock::now()).time_since_epoch().count();
 }
@@ -248,8 +261,10 @@ void sendPackets() {
         data.push_back(sentPackets[i].length);
         data.push_back(sentPackets[i].sentTime);
       }
-      ret = write(sockToClient, data.data(), data.size()*8);
-      assert(ret == data.size()*8);
+      for (const Client& client : clients) {
+        ret = write(client.sock, data.data(), data.size()*8);
+        assert(ret == data.size()*8);
+      }
       sentPackets.clear();
     } else if (sentPackets.size() == 1) {
       firstAdded = getTime();
@@ -370,10 +385,10 @@ void activateNFQ(int queueNum,
 }
 
 void setupSockToClient() {
-  cout << "setting up sock to client" << endl;
+  cout << "setting up sock to client(s)" << endl;
   int listeningSock;
   int portNum = 17666;
-  struct sockaddr_in serverAddr, clientAddr;
+  struct sockaddr_in serverAddr;
   listeningSock = socket(AF_INET, SOCK_STREAM, 0);
   if (listeningSock < 0) {
     perror("ERROR opening socket");
@@ -394,16 +409,17 @@ void setupSockToClient() {
   }
   listen(listeningSock, 5);
 
-  cout << "listening for client" << endl;
-  while (true) {
-    socklen_t clientLen = sizeof(clientAddr);
-    sockToClient = accept(listeningSock, (struct sockaddr *)&clientAddr, &clientLen);
-    if (sockToClient < 0) {
+  while (clients.size() < numClients) {
+    cout << "listening for client " << clients.size() + 1 << endl;
+    Client client;
+    client.clientLen = sizeof(client.addr);
+    client.sock = accept(listeningSock, (struct sockaddr *)&client.addr, &client.clientLen);
+    if (client.sock < 0) {
       perror("error accepting");
       exit(1);
     }
     char buffer[8];
-    int ret = read(sockToClient, buffer, 8);
+    int ret = read(client.sock, buffer, 8);
     if (ret < 8) {
       perror("error getting password");
       exit(1);
@@ -411,10 +427,11 @@ void setupSockToClient() {
     buffer[7]= '\0';
     if (strcmp(buffer, password) != 0) {
       cerr << "wrong password, got " << buffer << endl;
-      close(sockToClient);
+      close(client.sock);
     } else {
-      cout << "client has connected" << endl;
-      break;
+      cout << "client " << clients.size() + 1 
+           << " has connected from real ip " << inet_ntoa(client.addr.sin_addr) << endl;
+      clients.push_back(client);
     }
   }
 
@@ -464,12 +481,14 @@ int main(int argc, char *argv[]) {
     cout << "delaying " << delay << " seconds" << endl;
     activateNFQ(queueNum, &cb);
   } else if (strcmp(argv[2], "inject") == 0) {
-    assert(argc >= 6);
-    delay = atof(argv[3]);
+    assert(argc >= 7);
+    numClients = atoi(argv[3]);
+    cout << "number of clients: " << numClients << endl;
+    delay = atof(argv[4]);
     cout << "delaying somewhere around " << delay << " seconds" << endl;
-    variation = atof(argv[4]);
+    variation = atof(argv[5]);
     cout << "variation " << variation << " seconds" << endl;
-    throttle = atof(argv[5]);
+    throttle = atof(argv[6]);
     cout << "throttle " << throttle << " seconds" << endl;
     setupSockToClient();
     cout << "creating new sendPacket thread" << endl;
