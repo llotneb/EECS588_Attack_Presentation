@@ -193,7 +193,6 @@ int cbAddToWaiting(nfq_q_handle *qh, nfgenmsg *nfmsg,
                    nfq_data *nfa, void *passed_data) {
   int64 createdTime = getTime();
   queue_handle = qh;
-  cout << "to wait packet has handle " << queue_handle << endl;
   struct nfqnl_msg_packet_hdr *ph = nfq_get_msg_packet_hdr(nfa); 
   uint32 id = ntohl(ph->packet_id);
   unsigned char* data;
@@ -287,6 +286,7 @@ void sendPackets() {
 
     int64 time = getTime();
     int ret = nfq_set_verdict(queue_handle, toSend.id, NF_ACCEPT, 0, NULL); /* Verdict packet */
+    cout << "sent packet with size " << toSend.length << endl;
     assert(ret >= 0);
     sentTimes.push(time);
     sentTimes.pop();
@@ -547,8 +547,7 @@ int main(int argc, char *argv[]) {
     thread sendThread(sendPackets);
     activateNFQ(queueNum, cbAddToWaiting);
   } else if (strcmp(argv[2], "detect") == 0) {
-    assert(argc == 4);
-    double periodDouble = atof(argv[3]);
+    assert(argc == 3);
     string serverName = "socialr.xyz";
     setupSockToServer(serverName);
     cout << "creating new detectPacket thread" << endl;
