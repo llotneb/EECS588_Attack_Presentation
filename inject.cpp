@@ -35,9 +35,16 @@
 
 using namespace std;
 
-double delay = 0;
-double variation = 0;
-double throttle = 0;
+using uint64 = uint64_t;
+using int64 = int64_t;
+using uint32 = uint32_t;
+
+const int64 million = 1000000;
+const int64 billion = 1000000000;
+
+int64 period = 0; // in microseconds
+double fastSpeed = 0.0; // in packets/second
+double slowSpeed = 0.0; // in packets/second
 int numClients = 0;
 
 struct Client {
@@ -49,9 +56,6 @@ struct Client {
 vector<Client> clients;
   
 
-using uint64 = uint64_t;
-using int64 = int64_t;
-using uint32 = uint32_t;
 
 struct WaitingPacket {
   uint32_t id;
@@ -160,8 +164,9 @@ static void print_pkt(struct nfq_data *tb)
   //ProcessPacket(data, ret);
 
   struct timespec req;
+  int64 delay = 0;
   req.tv_sec = floor(delay);
-  req.tv_nsec = floor((delay - floor(delay))*1000000000);
+  req.tv_nsec = floor((delay - floor(delay))*billion);
 
   ret = nanosleep(&req, nullptr);
   if (ret < 0) {
@@ -226,21 +231,51 @@ struct SentPacket {
 };
 
 void sendPackets() {
-  vector<SentPacket> sentPackets;
-  int64 firstAdded = getTime();
-  
-  normal_distribution<> distribution(0.0, variation);
+  const int64 halfPeriod = period/2; //in microsends
+  enum SPEED {
+    FAST,
+    SLOW
+  };
+  SPEED speed = FAST;
+
+  vector<SentPacket> sentPackets; // waiting to send to client(s)
+  int64 firstAdded = getTime(); // for knowing how long to wait to send to client(s)
+
+  const int bucketSize = 3; // a parameter for smoothing out the fast speed
+  queue<int64> sentTimes; // the last bucketSize sent times
+  while (sentTimes.size() < bucketSize) {
+    sentTimes.push(0);
+  }
+
+  int64 startTime = getTime();
 
   while (true) {
-    double jitter = distribution(prng);
-    jitter = max(min(jitter, variation*3.0), -variation*3.0);
-    int64 currentDelay = max(delay + jitter + throttle, 0.0)*1000000;
+    assert(sentTimes.size() == bucketSize);
+    int64 now = getTime();
+    if ((now - startTime) % period < halfPeriod) {
+      speed = FAST;
+    } else {
+      speed = SLOW;
+    }
+
+    int64 targetTime;
+    if (speed == FAST) {
+      targetTime = sentTimes.front() + million/fastSpeed;
+    } else {
+      targetTime = sentTimes.back() + million/slowSpeed;
+    }
 
     unique_lock<mutex> lock(waitingPacketsMutex);
     while (waitingPackets.empty()) {
       waitingPacketsCv.wait(lock);
     } 
-    int64 toWait = currentDelay - (getTime() - waitingPackets.front().createdTime);
+    now = getTime();
+    int64 toWait = targetTime - now; 
+    if (speed == SLOW && (now % period) + toWait >= period) {
+      toWait = min(toWait, 
+                   max(period - (now % period),
+                       sentTimes.front() + (int64)(million/fastSpeed)));
+    }
     if (toWait > 0) {
       lock.unlock();
       this_thread::sleep_for(chrono::microseconds(toWait));
@@ -253,9 +288,18 @@ void sendPackets() {
     int64 time = getTime();
     int ret = nfq_set_verdict(queue_handle, toSend.id, NF_ACCEPT, 0, NULL); /* Verdict packet */
     assert(ret >= 0);
+    sentTimes.push(time);
+    sentTimes.pop();
+
+    now = getTime();
+    if ((now - startTime) % period < halfPeriod) {
+      speed = FAST;
+    } else {
+      speed = SLOW;
+    }
 
     sentPackets.push_back(SentPacket(toSend.length, toSend.createdTime, time));
-    if (sentPackets.size() >= 10 || (sentPackets.size() >= 2 && time - firstAdded >= 2*1000000)) {
+    if ((sentPackets.size() >= 10 || (sentPackets.size() >= 2 && time - firstAdded >= 2*million)) && speed == SLOW) {
       vector<int64> data;
       for (int i = 0; i < sentPackets.size(); ++i) {
         data.push_back(sentPackets[i].length);
@@ -420,7 +464,7 @@ void setupSockToClient() {
     }
     char buffer[8];
     int ret = read(client.sock, buffer, 8);
-    if (ret < 8) {
+    if (ret != 8) {
       perror("error getting password");
       exit(1);
     }
@@ -429,6 +473,11 @@ void setupSockToClient() {
       cerr << "wrong password, got " << buffer << endl;
       close(client.sock);
     } else {
+      ret = write(client.sock, &period, sizeof(period));
+      if (ret != sizeof(period)) {
+        perror("could not send period to client");
+        exit(1);
+      }
       cout << "client " << clients.size() + 1 
            << " has connected from real ip " << inet_ntoa(client.addr.sin_addr) << endl;
       clients.push_back(client);
@@ -461,8 +510,13 @@ void setupSockToServer(const string& serverName) {
     exit(1);
   }
   int ret = write(sockToServer, password, 8);
-  if (ret < 0) {
+  if (ret != 8) {
     perror("ERROR writing to socket");
+    exit(1);
+  }
+  ret = read(sockToServer, &period, sizeof(period));
+  if (ret != sizeof(period)) {
+    perror("error getting the period");
     exit(1);
   }
   cout << "connected to server" << endl;
@@ -475,26 +529,25 @@ int main(int argc, char *argv[]) {
   cout << "using queue num " << queueNum << endl;
  
   if (strcmp(argv[2], "log") == 0) {
-    if (argc >= 4) {
-      delay = atof(argv[3]);
-    }
-    cout << "delaying " << delay << " seconds" << endl;
     activateNFQ(queueNum, &cb);
   } else if (strcmp(argv[2], "inject") == 0) {
-    assert(argc >= 7);
+    assert(argc == 7);
     numClients = atoi(argv[3]);
     cout << "number of clients: " << numClients << endl;
-    delay = atof(argv[4]);
-    cout << "delaying somewhere around " << delay << " seconds" << endl;
-    variation = atof(argv[5]);
-    cout << "variation " << variation << " seconds" << endl;
-    throttle = atof(argv[6]);
-    cout << "throttle " << throttle << " seconds" << endl;
+    double periodDouble = atof(argv[4]);
+    cout << "fluctuation period is " << periodDouble << " seconds " << endl;
+    period = periodDouble * million;
+    slowSpeed = atof(argv[5]);
+    cout << "slow speed is " << slowSpeed << " packets/sec" << endl;
+    fastSpeed = atof(argv[6]);
+    cout << "fast speed is <= " << fastSpeed << " packets/sec" << endl;
     setupSockToClient();
     cout << "creating new sendPacket thread" << endl;
     thread sendThread(sendPackets);
     activateNFQ(queueNum, cbAddToWaiting);
   } else if (strcmp(argv[2], "detect") == 0) {
+    assert(argc == 4);
+    double periodDouble = atof(argv[3]);
     string serverName = "socialr.xyz";
     setupSockToServer(serverName);
     cout << "creating new detectPacket thread" << endl;
