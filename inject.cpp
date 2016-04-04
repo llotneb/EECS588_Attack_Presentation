@@ -10,6 +10,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <random>
+#include <fstream>
+#include <vector>
 
 #include <netinet/in.h>
 #include <linux/types.h>
@@ -259,6 +261,8 @@ void sendPackets() {
 void detectPackets() {
   vector<ArrivedPacket> seenPackets; // Packts that have fully arrived through tor
   vector<SentPacket> sentPackets; // Packet times of sent packets. The server sent us these times.
+  int seenWritten = 0;
+  int sentWritten = 0;
 
   int64 buffer[20];
   int haveAmount = 0;
@@ -293,6 +297,20 @@ void detectPackets() {
       cout << "new packet seen " << seenPackets.back().length << endl;
     }
     arrivedPacketsMutex.unlock();
+
+    ofstream ofsSeen("seenpackets.txt", ios_base::app);
+    for (int i = seenWritten; i < seenPackets.size(); ++i) {
+      ofsSeen << seenPackets[i].id << ',' << seenPackets[i].length << ',' << seenPackets[i].arrivedTime << '\n';
+      ++seenWritten;
+    }
+    ofsSeen.close();
+
+    ofstream ofsSent("sentpackets.txt", ios_base::app);
+    for (int i = sentWritten; i < sentPackets.size(); ++i) {
+      ofsSent << sentPackets[i].length << ',' << sentPackets[i].sentTime << '\n';
+      ++sentWritten;
+    }
+    ofsSent.close();
     this_thread::sleep_for(chrono::milliseconds(500));
   }
 }
