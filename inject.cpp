@@ -519,6 +519,7 @@ void setupSockToServer(const string& serverName) {
     perror("error getting the period");
     exit(1);
   }
+  cout << "got period " << period << endl;
   cout << "connected to server" << endl;
 }
 
