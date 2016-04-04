@@ -274,7 +274,7 @@ void sendPackets() {
     if (speed == SLOW && (now % period) + toWait >= period) {
       toWait = min(toWait, 
                    max(period - (now % period),
-                       sentTimes.front() + (int64)(million/fastSpeed)));
+                       sentTimes.front() + 3*(int64)(million/fastSpeed)));
     }
     if (toWait > 0) {
       lock.unlock();
