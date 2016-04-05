@@ -408,6 +408,9 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
     // full periods, used for computed the best*counts vectors
     const int numPeriods = (seenPackets[end-1].arrivedTime - 
                             (seenPackets[begin].arrivedTime + offset))/period;
+    if (numPeriods <= 0) {
+      cout << "only " << numPeriods << " periods. waiting" << endl;
+    }
     vector<int> aCounts(numPeriods, 0);
     vector<int> bCounts(numPeriods, 0);
     int64 aTime = numPeriods * halfPeriod;
@@ -440,6 +443,9 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
     assert(leftoverTime < period);
     aTime += min(leftoverTime, halfPeriod);
     bTime += max((int64)0, leftoverTime - halfPeriod);
+
+    cout << "aPackets: " << aPackets << " bPackets: " << bPackets
+         << " aTime: " << aTime << " bTime: " << bTime << endl;
 
     double aAverage, bAverage;
     if (leftoverTime < halfPeriod) {
@@ -476,12 +482,32 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
     }
   }
 
-  double bestHighStdDev = stdDev(bestHighCounts);
-  double bestLowStdDev = stdDev(bestLowCounts);
+  double bestHighStdDev = -1.0, bestLowStdDev = -1.0;
+  if (bestHighCounts.size() > 1) {
+    bestHighStdDev = stdDev(bestHighCounts);
+  }
+  if (bestLowCounts.size() > 1) {
+    bestLowStdDev = stdDev(bestLowCounts);
+  }
 
   cout << "bestTrial: " << bestTrial << " bestDifference: " << bestDifference << endl;
   cout << "bestHighAverage: " << bestHighAverage << " bestLowAverage: " << bestLowAverage << endl;
-  cout << "bestHighStdDev: " << bestHighStdDev << "bestLowStdDev: " << bestLowStdDev << endl;
+  cout << "bestHighStdDev: " << bestHighStdDev << " bestLowStdDev: " << bestLowStdDev << endl;
+
+  if (bestHighStdDev >= 0 && bestLowStdDev >= 0) {
+    double gap = bestHighAverage - bestLowAverage - bestHighStdDev*2 - bestLowStdDev*2;
+    if (gap > 0) {
+      cout << "We think there is a correlation" << endl;
+    } else {
+      cout << "We think there is not a correlation" << endl;
+    }
+    
+    double correlation = atan(gap / sqrt(bestDifference))/3.14159*2*50 + 50.0;
+    cout << "We estimate a " << correlation << "% correlation" << endl;
+  
+  } else {
+    cout << "not enough data to detect correlation" << endl;
+  }
   return;
 }
 
@@ -520,6 +546,7 @@ void detectPackets() {
 
     arrivedPacketsMutex.lock(); // arrived packets is just a temporary store of packets from tor
     while (!arrivedPackets.empty()) {
+      cout << "new packet seen " << arrivedPackets.front().length << endl;
       if (arrivedPackets.front().length >= minPacketLength) {
         seenPackets.push_back(arrivedPackets.front());
         cout << "new packet seen " << seenPackets.back().length << endl;
@@ -547,9 +574,9 @@ void detectPackets() {
 
     runDetection(seenPackets, false);
 
-    if (seenPackets.size() > 600 && seenPackets.back().arrivedTime - getTime() >= 5*million) {
+    if (seenPackets.size() > 600 && getTime() - seenPackets.back().arrivedTime >= 5*million) {
       cout << "saw " << seenPackets.size() << " packets and it has been "
-           << seenPackets.back().arrivedTime - getTime()
+           << getTime() - seenPackets.back().arrivedTime
            << " seconds since last packet so stopping collection" << endl;
       break;
     }
