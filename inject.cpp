@@ -234,7 +234,7 @@ struct SentPacket {
 };
 
 void sendPackets() {
-  const int64 halfPeriod = period/2; //in microsends
+  const int64 halfPeriod = period/2; // in microseconds
   enum SPEED {
     FAST,
     SLOW
@@ -254,6 +254,8 @@ void sendPackets() {
 
   while (true) {
     assert(sentTimes.size() == bucketSize);
+    // Generate a square wave, where crests correspond to high packet send rate,
+    // and troughs correspond to low packet send rate.
     int64 now = getTime();
     if ((now - startTime) % period < halfPeriod) {
       speed = FAST;
@@ -416,7 +418,6 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
     int64 aTime = numPeriods * halfPeriod;
     int64 bTime = numPeriods * halfPeriod;
 
-
     for (int j = begin; j < end; ++j) {
       if (seenPackets[j].arrivedTime < beginTime + offset) {
         continue; // skip the offset
@@ -513,7 +514,7 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
 
 
 void detectPackets() {
-  vector<ArrivedPacket> seenPackets; // Packts that have fully arrived through tor
+  vector<ArrivedPacket> seenPackets; // Packets that have fully arrived through tor
   vector<SentPacket> sentPackets; // Packet times of sent packets. The server sent us these times.
   int seenWritten = 0;
   int sentWritten = 0;
@@ -585,8 +586,6 @@ void detectPackets() {
   runDetection(seenPackets, true);
   cout << "all done with detection" << endl;
 }
-  
-  
   
 
 void activateNFQ(int queueNum, 
@@ -665,6 +664,9 @@ void setupSockToClient() {
   }
   listen(listeningSock, 5);
 
+  // Mallory will accept up to N connections from eavesdroppers serially.
+  // The eavesdropper supplies a password (not really necessary for this demo),
+  // and then Mallory sends her the period.
   while (clients.size() < numClients) {
     cout << "listening for client " << clients.size() + 1 << endl;
     Client client;
@@ -685,6 +687,7 @@ void setupSockToClient() {
       cerr << "wrong password, got " << buffer << endl;
       close(client.sock);
     } else {
+      // Server "Mallory" sends the period to client "Eve".
       ret = write(client.sock, &period, sizeof(period));
       if (ret != sizeof(period)) {
         perror("could not send period to client");
@@ -698,6 +701,7 @@ void setupSockToClient() {
 
 }
 
+// Each eavesdropper authenticates, then retrieves the period from Mallory.
 void setupSockToServer(const string& serverName) {
   cout << "setting up sock to server" << endl;
   int portNum = 17666;
@@ -744,7 +748,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[2], "log") == 0) {
     activateNFQ(queueNum, &cb);
   } else if (strcmp(argv[2], "inject") == 0) {
-    assert(argc == 7);
+    assert(argc == 8);
     numClients = atoi(argv[3]);
     cout << "number of clients: " << numClients << endl;
     double periodDouble = atof(argv[4]);
@@ -754,6 +758,12 @@ int main(int argc, char *argv[]) {
     cout << "slow speed is " << slowSpeed << " packets/sec" << endl;
     fastSpeed = atof(argv[6]);
     cout << "fast speed is <= " << fastSpeed << " packets/sec" << endl;
+    string userToTrack(argv[7]);
+    cout << "Mallory will be on the lookout for user " << userToTrack << endl;
+    ofstream ofs("usernames.txt", std::ofstream::out);
+    ofs << userToTrack;
+    ofs.close();
+
     setupSockToClient();
     cout << "creating new sendPacket thread" << endl;
     thread sendThread(sendPackets);
