@@ -412,6 +412,7 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
                             (seenPackets[begin].arrivedTime + offset))/period;
     if (numPeriods <= 0) {
       cout << "only " << numPeriods << " periods. waiting" << endl;
+      return;
     }
     vector<int> aCounts(numPeriods, 0);
     vector<int> bCounts(numPeriods, 0);
