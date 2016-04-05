@@ -342,8 +342,150 @@ double stdDev(const vector<int>& vec) {
 }
 
 
-void detectPackets() {
+void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
+  const int trials = 20; // the amount of different offsets to try
   const int64 halfPeriod = period / 2;
+
+  // The number to find in a half period to count the download as started
+  const int globSize = 10; 
+  const int endGlobSize = 3; // to have ended
+  int begin; // the beginning index of the download, inclusive
+  for (begin = 0; begin + globSize - 1 < seenPackets.size(); ++begin) {
+    if (seenPackets[begin + globSize - 1].arrivedTime - 
+        seenPackets[begin].arrivedTime < halfPeriod) {
+      break;
+    }
+  }
+  if (begin + globSize - 1 >= seenPackets.size()) {
+    if (lastRun) {
+      cerr << "didn't detect start of download" << endl;
+      exit(1);
+    } else {
+      cout << "didn't detect start of download yet" << endl;
+      return;
+    }
+  }
+
+  int end; // exclusive
+  if (lastRun) {
+    for (end = seenPackets.size(); end - endGlobSize >= begin; --end) {
+      if (seenPackets[end - 1].arrivedTime - 
+          seenPackets[end - endGlobSize].arrivedTime < halfPeriod) {
+        break;
+      }
+    }
+  } else {
+    end = seenPackets.size();
+  }
+  if (end <= begin || end <= 0 || end > seenPackets.size()) {
+    if (lastRun) {
+      cerr << "could not find end of download" << endl;
+      exit(1);
+    } else {
+      cout << "couldn't get range yet" << endl;
+      return;
+    }
+  }
+
+  cout << "There are " << end - begin << " valid seen packets in range" << endl;
+  cout << "they span " << (seenPackets[end-1].arrivedTime - 
+                           seenPackets[begin].arrivedTime)/millionDouble
+       << " seconds" << endl;
+
+  int bestTrial = 0;
+  double bestDifference = 0.0;
+  double bestHighAverage = 0.0;
+  double bestLowAverage = 0.0;
+  vector<int> bestHighCounts; // full half periods
+  vector<int> bestLowCounts; // full half periods
+
+  const int64 beginTime = seenPackets[begin].arrivedTime;
+  for (int i = 0; i < trials; ++i) {
+    int64 offset = (i*halfPeriod)/trials;
+    int aPackets = 0;
+    int bPackets = 0;
+
+    // full periods, used for computed the best*counts vectors
+    const int numPeriods = (seenPackets[end-1].arrivedTime - 
+                            (seenPackets[begin].arrivedTime + offset))/period;
+    vector<int> aCounts(numPeriods, 0);
+    vector<int> bCounts(numPeriods, 0);
+    int64 aTime = numPeriods * halfPeriod;
+    int64 bTime = numPeriods * halfPeriod;
+
+
+    for (int j = begin; j < end; ++j) {
+      if (seenPackets[j].arrivedTime < beginTime + offset) {
+        continue; // skip the offset
+      }
+      const int periodNum = (seenPackets[j].arrivedTime - (beginTime + offset))/period;
+      const int periodOffset = (seenPackets[j].arrivedTime - (beginTime + offset)) % period;
+      if (periodNum < numPeriods) {
+        if (periodOffset < halfPeriod) {
+          ++aCounts[periodNum];
+        } else {
+          ++bCounts[periodNum];
+        }
+      }
+      if (periodOffset < halfPeriod) {
+        ++aPackets;
+      } else {
+        ++bPackets;
+      }
+    }
+
+    const int64 leftoverTime = seenPackets[end-1].arrivedTime - 
+                               (beginTime + offset) - numPeriods*period;
+    assert(leftoverTime >= 0);
+    assert(leftoverTime < period);
+    aTime += min(leftoverTime, halfPeriod);
+    bTime += max((int64)0, leftoverTime - halfPeriod);
+
+    double aAverage, bAverage;
+    if (leftoverTime < halfPeriod) {
+      aAverage = ((double)aPackets - 0.5)/(aTime/millionDouble);
+      bAverage = ((double)bPackets)/(bTime/millionDouble);
+    } else {
+      aAverage = ((double)aPackets)/(aTime/millionDouble);
+      bAverage = ((double)bPackets - 0.5)/(bTime/millionDouble);
+    }
+    
+    double highAverage, lowAverage;
+    vector<int> highCounts, lowCounts;
+    if (aAverage >= bAverage) {
+      highAverage = aAverage;
+      lowAverage = bAverage;
+      highCounts = aCounts;
+      lowCounts = bCounts;
+    } else {
+      highAverage = bAverage;
+      lowAverage = aAverage;
+      highCounts = bCounts;
+      lowCounts = aCounts;
+    }
+
+    const double difference = highAverage - lowAverage;
+    if (difference > bestDifference) {
+      bestDifference = difference;
+      bestTrial = i;
+      bestHighAverage = highAverage;
+      bestLowAverage = lowAverage;
+      bestHighCounts = highCounts;
+      bestLowCounts = lowCounts;
+    }
+  }
+
+  double bestHighStdDev = stdDev(bestHighCounts);
+  double bestLowStdDev = stdDev(bestLowCounts);
+
+  cout << "bestTrial: " << bestTrial << " bestDifference: " << bestDifference << endl;
+  cout << "bestHighAverage: " << bestHighAverage << " bestLowAverage: " << bestLowAverage << endl;
+  cout << "bestHighStdDev: " << bestHighStdDev << "bestLowStdDev: " << bestLowStdDev << endl;
+  return;
+}
+
+
+void detectPackets() {
   vector<ArrivedPacket> seenPackets; // Packts that have fully arrived through tor
   vector<SentPacket> sentPackets; // Packet times of sent packets. The server sent us these times.
   int seenWritten = 0;
@@ -402,133 +544,18 @@ void detectPackets() {
 
     cout << "There are " << seenPackets.size() << " ok seen packets" << endl;
 
+    runDetection(seenPackets, false);
 
-    const int trials = 20; // the amount of different offsets to try
-
-    // The number to find in a half period to count the download as started
-    const int globSize = 10; 
-    const int endGlobSize = 3; // to have ended
-    int begin; // the beginning index of the download, inclusive
-    for (begin = 0; begin + globSize - 1 < seenPackets.size(); ++begin) {
-      if (seenPackets[begin + globSize - 1].arrivedTime - 
-          seenPackets[begin].arrivedTime < halfPeriod) {
-        break;
-      }
+    if (seenPackets.size() > 600 && seenPackets.back().arrivedTime - getTime() >= 5*million) {
+      cout << "saw " << seenPackets.size() << " packets and it has been "
+           << seenPackets.back().arrivedTime - getTime()
+           << " seconds since last packet so stopping collection" << endl;
+      break;
     }
-    if (begin + globSize - 1 >= seenPackets.size()) {
-      cerr << "did not detect start of download" << endl;
-      exit(1);
-    }
-
-    int end; // exclusive
-    for (end = seenPackets.size(); end - endGlobSize >= begin; --end) {
-      if (seenPackets[end - 1].arrivedTime - 
-          seenPackets[end - endGlobSize].arrivedTime < halfPeriod) {
-        break;
-      }
-    }
-    if (end <= begin || end <= 0 || end > seenPackets.size()) {
-      cerr << "could not find end of download" << endl;
-      exit(1);
-    }
-
-    cout << "There are " << end - begin << " valid seen packets in range" << endl;
-    cout << "they span " << (seenPackets[end-1].arrivedTime - 
-                             seenPackets[begin].arrivedTime)/millionDouble
-         << " seconds" << endl;
-  
-    int bestTrial = 0;
-    double bestDifference = 0.0;
-    double bestHighAverage = 0.0;
-    double bestLowAverage = 0.0;
-    vector<int> bestHighCounts; // full half periods
-    vector<int> bestLowCounts; // full half periods
-
-    const int64 beginTime = seenPackets[begin].arrivedTime;
-    for (int i = 0; i < trials; ++i) {
-      int64 offset = (i*halfPeriod)/trials;
-      int aPackets = 0;
-      int bPackets = 0;
-
-      // full periods, used for computed the best*counts vectors
-      const int numPeriods = (seenPackets[end-1].arrivedTime - 
-                              (seenPackets[begin].arrivedTime + offset))/period;
-      vector<int> aCounts(numPeriods, 0);
-      vector<int> bCounts(numPeriods, 0);
-      int64 aTime = numPeriods * halfPeriod;
-      int64 bTime = numPeriods * halfPeriod;
-
-  
-      for (int j = begin; j < end; ++j) {
-        if (seenPackets[j].arrivedTime < beginTime + offset) {
-          continue; // skip the offset
-        }
-        const int periodNum = (seenPackets[j].arrivedTime - (beginTime + offset))/period;
-        const int periodOffset = (seenPackets[j].arrivedTime - (beginTime + offset)) % period;
-        if (periodNum < numPeriods) {
-          if (periodOffset < halfPeriod) {
-            ++aCounts[periodNum];
-          } else {
-            ++bCounts[periodNum];
-          }
-        }
-        if (periodOffset < halfPeriod) {
-          ++aPackets;
-        } else {
-          ++bPackets;
-        }
-      }
-
-      const int64 leftoverTime = seenPackets[end-1].arrivedTime - 
-                                 (beginTime + offset) - numPeriods*period;
-      assert(leftoverTime >= 0);
-      assert(leftoverTime < period);
-      aTime += min(leftoverTime, halfPeriod);
-      bTime += max((int64)0, leftoverTime - halfPeriod);
-
-      double aAverage, bAverage;
-      if (leftoverTime < halfPeriod) {
-        aAverage = ((double)aPackets - 0.5)/(aTime/millionDouble);
-        bAverage = ((double)bPackets)/(bTime/millionDouble);
-      } else {
-        aAverage = ((double)aPackets)/(aTime/millionDouble);
-        bAverage = ((double)bPackets - 0.5)/(bTime/millionDouble);
-      }
-      
-      double highAverage, lowAverage;
-      vector<int> highCounts, lowCounts;
-      if (aAverage >= bAverage) {
-        highAverage = aAverage;
-        lowAverage = bAverage;
-        highCounts = aCounts;
-        lowCounts = bCounts;
-      } else {
-        highAverage = bAverage;
-        lowAverage = aAverage;
-        highCounts = bCounts;
-        lowCounts = aCounts;
-      }
-
-      const double difference = highAverage - lowAverage;
-      if (difference > bestDifference) {
-        bestDifference = difference;
-        bestTrial = i;
-        bestHighAverage = highAverage;
-        bestLowAverage = lowAverage;
-        bestHighCounts = highCounts;
-        bestLowCounts = lowCounts;
-      }
-    }
-
-    double bestHighStdDev = stdDev(bestHighCounts);
-    double bestLowStdDev = stdDev(bestLowCounts);
-
-    cout << "bestTrial: " << bestTrial << " bestDifference: " << bestDifference << endl;
-    cout << "bestHighAverage: " << bestHighAverage << " bestLowAverage: " << bestLowAverage << endl;
-    cout << "bestHighStdDev: " << bestHighStdDev << "bestLowStdDev: " << bestLowStdDev << endl;
-
     this_thread::sleep_for(chrono::milliseconds(2000));
   }
+  runDetection(seenPackets, true);
+  cout << "all done with detection" << endl;
 }
   
   
