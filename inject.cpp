@@ -519,7 +519,7 @@ void detectPackets() {
 
     arrivedPacketsMutex.lock(); // arrived packets is just a temporary store of packets from tor
     while (!arrivedPackets.empty()) {
-      if (seenPackets.front().length >= minPacketLength) {
+      if (arrivedPackets.front().length >= minPacketLength) {
         seenPackets.push_back(arrivedPackets.front());
       }
       arrivedPackets.pop();
