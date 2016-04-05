@@ -234,7 +234,7 @@ struct SentPacket {
 };
 
 void sendPackets() {
-  const int64 halfPeriod = period/2; //in microsends
+  const int64 halfPeriod = period/2; // in microseconds
   enum SPEED {
     FAST,
     SLOW
@@ -254,6 +254,8 @@ void sendPackets() {
 
   while (true) {
     assert(sentTimes.size() == bucketSize);
+    // Generate a square wave, where crests correspond to high packet send rate,
+    // and troughs correspond to low packet send rate.
     int64 now = getTime();
     if ((now - startTime) % period < halfPeriod) {
       speed = FAST;
@@ -408,11 +410,13 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
     // full periods, used for computed the best*counts vectors
     const int numPeriods = (seenPackets[end-1].arrivedTime - 
                             (seenPackets[begin].arrivedTime + offset))/period;
+    if (numPeriods <= 0) {
+      cout << "only " << numPeriods << " periods. waiting" << endl;
+    }
     vector<int> aCounts(numPeriods, 0);
     vector<int> bCounts(numPeriods, 0);
     int64 aTime = numPeriods * halfPeriod;
     int64 bTime = numPeriods * halfPeriod;
-
 
     for (int j = begin; j < end; ++j) {
       if (seenPackets[j].arrivedTime < beginTime + offset) {
@@ -440,6 +444,9 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
     assert(leftoverTime < period);
     aTime += min(leftoverTime, halfPeriod);
     bTime += max((int64)0, leftoverTime - halfPeriod);
+
+    cout << "aPackets: " << aPackets << " bPackets: " << bPackets
+         << " aTime: " << aTime << " bTime: " << bTime << endl;
 
     double aAverage, bAverage;
     if (leftoverTime < halfPeriod) {
@@ -476,18 +483,38 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
     }
   }
 
-  double bestHighStdDev = stdDev(bestHighCounts);
-  double bestLowStdDev = stdDev(bestLowCounts);
+  double bestHighStdDev = -1.0, bestLowStdDev = -1.0;
+  if (bestHighCounts.size() > 1) {
+    bestHighStdDev = stdDev(bestHighCounts);
+  }
+  if (bestLowCounts.size() > 1) {
+    bestLowStdDev = stdDev(bestLowCounts);
+  }
 
   cout << "bestTrial: " << bestTrial << " bestDifference: " << bestDifference << endl;
   cout << "bestHighAverage: " << bestHighAverage << " bestLowAverage: " << bestLowAverage << endl;
-  cout << "bestHighStdDev: " << bestHighStdDev << "bestLowStdDev: " << bestLowStdDev << endl;
+  cout << "bestHighStdDev: " << bestHighStdDev << " bestLowStdDev: " << bestLowStdDev << endl;
+
+  if (bestHighStdDev >= 0 && bestLowStdDev >= 0) {
+    double gap = bestHighAverage - bestLowAverage - bestHighStdDev*2 - bestLowStdDev*2;
+    if (gap > 0) {
+      cout << "We think there is a correlation" << endl;
+    } else {
+      cout << "We think there is not a correlation" << endl;
+    }
+    
+    double correlation = atan(gap / sqrt(bestDifference))/3.14159*2*50 + 50.0;
+    cout << "We estimate a " << correlation << "% correlation" << endl;
+  
+  } else {
+    cout << "not enough data to detect correlation" << endl;
+  }
   return;
 }
 
 
 void detectPackets() {
-  vector<ArrivedPacket> seenPackets; // Packts that have fully arrived through tor
+  vector<ArrivedPacket> seenPackets; // Packets that have fully arrived through tor
   vector<SentPacket> sentPackets; // Packet times of sent packets. The server sent us these times.
   int seenWritten = 0;
   int sentWritten = 0;
@@ -520,6 +547,7 @@ void detectPackets() {
 
     arrivedPacketsMutex.lock(); // arrived packets is just a temporary store of packets from tor
     while (!arrivedPackets.empty()) {
+      cout << "new packet seen " << arrivedPackets.front().length << endl;
       if (arrivedPackets.front().length >= minPacketLength) {
         seenPackets.push_back(arrivedPackets.front());
         cout << "new packet seen " << seenPackets.back().length << endl;
@@ -547,9 +575,9 @@ void detectPackets() {
 
     runDetection(seenPackets, false);
 
-    if (seenPackets.size() > 600 && seenPackets.back().arrivedTime - getTime() >= 5*million) {
+    if (seenPackets.size() > 600 && getTime() - seenPackets.back().arrivedTime >= 5*million) {
       cout << "saw " << seenPackets.size() << " packets and it has been "
-           << seenPackets.back().arrivedTime - getTime()
+           << getTime() - seenPackets.back().arrivedTime
            << " seconds since last packet so stopping collection" << endl;
       break;
     }
@@ -558,8 +586,6 @@ void detectPackets() {
   runDetection(seenPackets, true);
   cout << "all done with detection" << endl;
 }
-  
-  
   
 
 void activateNFQ(int queueNum, 
@@ -638,6 +664,9 @@ void setupSockToClient() {
   }
   listen(listeningSock, 5);
 
+  // Mallory will accept up to N connections from eavesdroppers serially.
+  // The eavesdropper supplies a password (not really necessary for this demo),
+  // and then Mallory sends her the period.
   while (clients.size() < numClients) {
     cout << "listening for client " << clients.size() + 1 << endl;
     Client client;
@@ -658,6 +687,7 @@ void setupSockToClient() {
       cerr << "wrong password, got " << buffer << endl;
       close(client.sock);
     } else {
+      // Server "Mallory" sends the period to client "Eve".
       ret = write(client.sock, &period, sizeof(period));
       if (ret != sizeof(period)) {
         perror("could not send period to client");
@@ -671,6 +701,7 @@ void setupSockToClient() {
 
 }
 
+// Each eavesdropper authenticates, then retrieves the period from Mallory.
 void setupSockToServer(const string& serverName) {
   cout << "setting up sock to server" << endl;
   int portNum = 17666;
@@ -717,7 +748,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[2], "log") == 0) {
     activateNFQ(queueNum, &cb);
   } else if (strcmp(argv[2], "inject") == 0) {
-    assert(argc == 7);
+    assert(argc == 8);
     numClients = atoi(argv[3]);
     cout << "number of clients: " << numClients << endl;
     double periodDouble = atof(argv[4]);
@@ -727,6 +758,12 @@ int main(int argc, char *argv[]) {
     cout << "slow speed is " << slowSpeed << " packets/sec" << endl;
     fastSpeed = atof(argv[6]);
     cout << "fast speed is <= " << fastSpeed << " packets/sec" << endl;
+    string userToTrack(argv[7]);
+    cout << "Mallory will be on the lookout for user " << userToTrack << endl;
+    ofstream ofs("usernames.txt", std::ofstream::out);
+    ofs << userToTrack;
+    ofs.close();
+
     setupSockToClient();
     cout << "creating new sendPacket thread" << endl;
     thread sendThread(sendPackets);
