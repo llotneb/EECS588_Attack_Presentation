@@ -6,7 +6,6 @@ sudo ./stoptables.sh
 # Using the iptables API, tell the UNIX Kernel to take all packets
 # leaving from tcp port 80 (HTTP) and queue them on queue 0
 # for analysis.
-sudo iptables -A OUTPUT -p tcp --sport 80 -j NFQUEUE --queue-num 0
 
 if [ ! -e "inject" ]
 then
