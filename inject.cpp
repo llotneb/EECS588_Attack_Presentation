@@ -503,7 +503,9 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
   cout << "bestHighStdDev: " << bestHighStdDev << " bestLowStdDev: " << bestLowStdDev << endl;
 
   if (bestHighStdDev >= 0 && bestLowStdDev >= 0) {
-    double gap = bestHighAverage - bestLowAverage - bestHighStdDev*2 - bestLowStdDev*2 - bestLowAverage;
+    double gap = bestHighAverage - bestLowAverage - 
+                 bestHighStdDev*3.0/sqrt(bestHighCounts.size()) -
+                 bestLowStdDev*3.0/sqrt(bestLowCounts.size()) - bestLowAverage;
     if (gap > 0) {
       cout << "We think there is a correlation, that this client is " << userToTrack << endl;
     } else {
