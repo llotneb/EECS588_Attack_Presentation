@@ -48,13 +48,14 @@ double fastSpeed = 0.0; // in packets/second
 double slowSpeed = 0.0; // in packets/second
 int numClients = 0;
 
+string userToTrack;
+
 const int minPacketLength = 1000;
 
 struct Client {
   int sock;
   socklen_t clientLen;
   struct sockaddr_in addr;
-  string username;
 };
 vector<Client> clients;
   
@@ -499,13 +500,16 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
   if (bestHighStdDev >= 0 && bestLowStdDev >= 0) {
     double gap = bestHighAverage - bestLowAverage - bestHighStdDev*2 - bestLowStdDev*2;
     if (gap > 0) {
-      cout << "We think there is a correlation" << endl;
+      cout << "We think there is a correlation, that this client is " << userToTrack << endl;
     } else {
-      cout << "We think there is not a correlation" << endl;
+      cout << "We think there is not a correlation, that this client is not "
+           << userToTrack << endl;
     }
     
     double correlation = atan(gap / sqrt(bestDifference))/3.14159*2*50 + 50.0;
-    cout << "We estimate a " << correlation << "% correlation" << endl;
+    cout << "We estimate a " << correlation
+         << "% correlation between this client and the lag we injected into "
+         << userToTrack << endl;
   
   } else {
     cout << "not enough data to detect correlation" << endl;
@@ -694,6 +698,14 @@ void setupSockToClient() {
         perror("could not send period to client");
         exit(1);
       }
+      char nameBuf[20];
+      memset(nameBuf, 0, 20);
+      strncpy(nameBuf, userToTrack.c_str(), 19);
+      ret = write(client.sock, nameBuf, sizeof(nameBuf));
+      if (ret != sizeof(nameBuf)) {
+        perror("could not send name to client");
+        exit(1);
+      }
       cout << "client " << clients.size() + 1 
            << " has connected from real ip " << inet_ntoa(client.addr.sin_addr) << endl;
       clients.push_back(client);
@@ -737,6 +749,15 @@ void setupSockToServer(const string& serverName) {
     exit(1);
   }
   cout << "got period " << period << endl;
+  char nameBuf[20];
+  ret = read(sockToServer, nameBuf, sizeof(nameBuf));
+  if (ret != sizeof(nameBuf)) {
+    perror("error getting the name to track");
+    exit(1);
+  }
+  nameBuf[19] = '\0';
+  userToTrack = string(nameBuf);
+  cout << "got name of target: " << userToTrack << endl;
   cout << "connected to server" << endl;
 }
 
@@ -759,9 +780,9 @@ int main(int argc, char *argv[]) {
     cout << "slow speed is " << slowSpeed << " packets/sec" << endl;
     fastSpeed = atof(argv[6]);
     cout << "fast speed is <= " << fastSpeed << " packets/sec" << endl;
-    string userToTrack(argv[7]);
+    userToTrack = string(argv[7]);
     cout << "Mallory will be on the lookout for user " << userToTrack << endl;
-    ofstream ofs("usernames.txt", std::ofstream::out);
+    ofstream ofs("username.txt", std::ofstream::out);
     ofs << userToTrack;
     ofs.close();
 
