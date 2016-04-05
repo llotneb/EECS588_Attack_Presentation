@@ -465,6 +465,7 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
     }
 
     const double difference = highAverage - lowAverage;
+    cout << "this trial difference was " << difference << endl;
     if (difference > bestDifference) {
       bestDifference = difference;
       bestTrial = i;
@@ -521,9 +522,9 @@ void detectPackets() {
     while (!arrivedPackets.empty()) {
       if (arrivedPackets.front().length >= minPacketLength) {
         seenPackets.push_back(arrivedPackets.front());
+        cout << "new packet seen " << seenPackets.back().length << endl;
       }
       arrivedPackets.pop();
-      cout << "new packet seen " << seenPackets.back().length << endl;
     }
     arrivedPacketsMutex.unlock();
 
