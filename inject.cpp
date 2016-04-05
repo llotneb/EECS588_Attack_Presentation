@@ -503,7 +503,7 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
   cout << "bestHighStdDev: " << bestHighStdDev << " bestLowStdDev: " << bestLowStdDev << endl;
 
   if (bestHighStdDev >= 0 && bestLowStdDev >= 0) {
-    double gap = bestHighAverage - bestLowAverage - bestHighStdDev*2 - bestLowStdDev*2;
+    double gap = bestHighAverage - bestLowAverage - bestHighStdDev*2 - bestLowStdDev*2 - bestLowAverage;
     if (gap > 0) {
       cout << "We think there is a correlation, that this client is " << userToTrack << endl;
     } else {
@@ -511,7 +511,7 @@ void runDetection(const vector<ArrivedPacket>& seenPackets, bool lastRun) {
            << userToTrack << endl;
     }
     
-    double correlation = atan(gap / sqrt(bestDifference))/3.14159*2*50 + 50.0;
+    double correlation = atan(gap / sqrt(bestLowAverage))/3.14159*2*50 + 50.0;
     cout << "We estimate a " << correlation
          << "% correlation between this client and the lag we injected into "
          << userToTrack << endl;
