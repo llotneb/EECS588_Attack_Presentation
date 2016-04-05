@@ -293,7 +293,12 @@ void sendPackets() {
 
     int64 time = getTime();
     int ret = nfq_set_verdict(queue_handle, toSend.id, NF_ACCEPT, 0, NULL); /* Verdict packet */
-    cout << "sent packet with size " << toSend.length << endl;
+    cout << "sent packet with size " << toSend.length;
+    if (speed == FAST) {
+      cout << " in fast mode" << endl;
+    } else {
+      cout << " in slow mode" << endl;
+    }
     assert(ret >= 0);
     sentTimes.push(time);
     sentTimes.pop();

